@@ -9,7 +9,9 @@ Table of Contents
 * [Name](#name)
 * [Synopsis](#synopsis)
 * [Description](#description)
-* [TODO](#todo)
+* [Installation](#installation)
+* [API](#api)
+* [Testing](#testing)
 * [Community](#community)
     * [English Mailing List](#english-mailing-list)
     * [Chinese Mailing List](#chinese-mailing-list)
@@ -26,6 +28,10 @@ local parser = require "resty.multipart.parser"
 ngx.req.read_body()
 
 local body = ngx.req.get_body_data()
+if not body then
+   ngx.say("request body is unavailable in memory")
+   return
+end
 
 local p, err = parser.new(body, ngx.var.http_content_type)
 if not p then
@@ -36,6 +42,9 @@ end
 while true do
    local part_body, name, mime, filename = p:parse_part()
    if not part_body then
+      if name then
+         ngx.say("failed to parse multipart body: ", name)
+      end
       break
    end
    ngx.say("== part ==")
@@ -55,10 +64,60 @@ to parse buffered request bodies read by the builtin request body reader of the 
 
 Anyway, be very careful when using this for large file uploads. Use `lua-resty-upload` instead.
 
-TODO
-====
+Installation
+------------
 
-* Better error reporting.
+Install the release with LuaRocks configured for your OpenResty LuaJIT:
+
+```sh
+luarocks install lua-resty-multipart-parser 1.1.0-1
+```
+
+Ensure the installed Lua directory is included in `lua_package_path`. The
+module is loaded as `require "resty.multipart.parser"`.
+
+API
+===
+
+`parser.new(body, content_type, options?)` accepts a complete Lua string and a
+multipart Content-Type value. A one-element Content-Type table is also accepted.
+It returns a parser or `nil, err`. Reading a request body, including one stored
+in an NGINX temporary file, is the caller's responsibility. Set an appropriate
+`client_max_body_size` and check the body size before reading a temporary file
+into memory. The parser does not perform file I/O.
+
+The optional `options` table accepts positive integer limits:
+
+* `max_header_size`: maximum Content-Type length and maximum header block length
+  per part, in bytes. Defaults to 8192. The final CRLF separator is excluded
+  from the part header block length.
+* `max_parts`: maximum number of parts. Defaults to 1000.
+
+`p:parse_part()` returns `part_body, name, mime, filename`. Empty bodies and empty
+quoted parameter values are preserved as empty strings. Other multipart types
+may omit form-data metadata; `multipart/form-data` requires a `form-data`
+Content-Disposition with a `name` parameter.
+
+Normal completion returns `nil` without an error, including on subsequent
+calls. Invalid or truncated data returns `nil, err`; subsequent calls return the
+same error. Consume all parts to validate the complete message before using a
+selected field. Preamble and epilogue are ignored, and the input string is
+released by the parser after completion or an error.
+
+Quoted parameters support escaped characters. Duplicate parameters and duplicate
+Content-Disposition or Content-Type fields are rejected. Multiple parts with
+the same field name remain supported and are returned in their original order.
+Boundary values are limited to the RFC 2046 grammar and 70 bytes.
+
+Testing
+-------
+
+Install OpenResty and [Test::Nginx](https://github.com/openresty/test-nginx), then
+run the integration suite:
+
+```sh
+TEST_NGINX_BINARY=/usr/local/openresty/nginx/sbin/nginx prove -r t
+```
 
 [Back to TOC](#table-of-contents)
 
@@ -86,7 +145,7 @@ Bugs and Patches
 
 Please report bugs or submit patches by
 
-1. creating a ticket on the [GitHub Issue Tracker](https://github.com/openresty/lua-resty-lrucache/issues),
+1. creating a ticket on the [GitHub Issue Tracker](https://github.com/HanadaLee/lua-resty-multipart-parser/issues),
 1. or posting to the [OpenResty community](#community).
 
 [Back to TOC](#table-of-contents)
