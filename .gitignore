@@ -4,3 +4,4 @@
 *.bak
 go
 t/servroot/
+*.rock

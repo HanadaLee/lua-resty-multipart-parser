@@ -1,0 +1,131 @@
+name: Test and publish
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  test:
+    if: github.repository == 'HanadaLee/lua-resty-multipart-parser'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install OpenResty and Test::Nginx
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates curl gnupg cpanminus build-essential libluajit-5.1-dev luajit zip unzip
+          curl -fsSL --retry 3 https://openresty.org/package/pubkey.gpg \
+            | gpg --dearmor > "$RUNNER_TEMP/openresty.gpg"
+          sudo install -m 644 "$RUNNER_TEMP/openresty.gpg" /usr/share/keyrings/openresty.gpg
+          echo "deb [signed-by=/usr/share/keyrings/openresty.gpg] https://openresty.org/package/ubuntu noble main" \
+            | sudo tee /etc/apt/sources.list.d/openresty.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openresty
+          sudo cpanm --notest --mirror https://cpan.metacpan.org --mirror-only Test::Nginx
+
+      - name: Install LuaRocks
+        run: |
+          bash util/setup-luarocks.sh "$RUNNER_TEMP/luarocks"
+          echo "$RUNNER_TEMP/luarocks/bin" >> "$GITHUB_PATH"
+
+      - name: Run module regressions
+        env:
+          TEST_NGINX_BINARY: /usr/local/openresty/nginx/sbin/nginx
+        run: |
+          "$TEST_NGINX_BINARY" -V
+          prove -r t
+
+      - name: Test installed package
+        id: package
+        env:
+          TEST_NGINX_BINARY: /usr/local/openresty/nginx/sbin/nginx
+        run: |
+          rockspec="$(find rockspecs -name 'lua-resty-multipart-parser-*.rockspec' | sort -V | tail -n 1)"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            [[ "$GITHUB_REF_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            rockspec="rockspecs/lua-resty-multipart-parser-${GITHUB_REF_NAME}-1.rockspec"
+            source_rock="lua-resty-multipart-parser-${GITHUB_REF_NAME}-1.src.rock"
+            luajit - "$rockspec" "$GITHUB_REF_NAME" <<'LUA'
+          local spec = {}
+          setfenv(assert(loadfile(arg[1])), spec)()
+          assert(spec.package == "lua-resty-multipart-parser")
+          assert(spec.version == arg[2] .. "-1")
+          assert(spec.source.tag == arg[2])
+          assert(spec.source.url == "git+https://github.com/HanadaLee/lua-resty-multipart-parser.git")
+          assert(dofile("lib/resty/multipart/parser.lua")._VERSION == arg[2])
+          LUA
+            luarocks lint "$rockspec"
+            luarocks pack "$rockspec"
+            luarocks --lua-version=5.1 --tree="$RUNNER_TEMP/rock-tree" install "$source_rock"
+            echo "rockspec=$rockspec" >> "$GITHUB_OUTPUT"
+            echo "source_rock=$source_rock" >> "$GITHUB_OUTPUT"
+          else
+            luarocks lint "$rockspec"
+            luarocks --lua-version=5.1 --tree="$RUNNER_TEMP/rock-tree" make "$rockspec"
+          fi
+          bash util/test-installed.sh "$RUNNER_TEMP/rock-tree" "$RUNNER_TEMP/installed-tests"
+
+      - name: Save release package
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-rocks
+          path: |
+            ${{ steps.package.outputs.rockspec }}
+            ${{ steps.package.outputs.source_rock }}
+          if-no-files-found: error
+
+      - name: Save nginx diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nginx-test-logs
+          path: |
+            t/servroot/logs/
+            ${{ runner.temp }}/installed-tests/t/servroot/logs/
+
+  publish:
+    if: github.repository == 'HanadaLee/lua-resty-multipart-parser' && startsWith(github.ref, 'refs/tags/')
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install LuaRocks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libluajit-5.1-dev luajit curl zip unzip
+          bash util/setup-luarocks.sh "$RUNNER_TEMP/luarocks"
+          echo "$RUNNER_TEMP/luarocks/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-rocks
+          path: release
+
+      - name: Publish to LuaRocks
+        env:
+          LUAROCKS_API_KEY: ${{ secrets.LUAROCKS_API_KEY }}
+        run: |
+          test -n "$LUAROCKS_API_KEY"
+          luarocks upload \
+            "release/rockspecs/lua-resty-multipart-parser-${GITHUB_REF_NAME}-1.rockspec" \
+            "release/lua-resty-multipart-parser-${GITHUB_REF_NAME}-1.src.rock" \
+            --temp-key "$LUAROCKS_API_KEY"
