@@ -6,7 +6,7 @@ local concat = table.concat
 local floor = math.floor
 local huge = math.huge
 
-local _M = { _VERSION = "1.1.0" }
+local _M = { _VERSION = "1.2.0" }
 local mt = { __index = _M }
 local token_bytes = {}
 local tokens = "!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -249,6 +249,7 @@ local function read_headers(self, start)
     end
     header = sub(header, 1, last)
     local headers = {}
+    local part_headers = {}
     local current, values
     local pos = 1
     while pos <= #header do
@@ -264,7 +265,9 @@ local function read_headers(self, start)
             values[#values + 1] = trim_space(line)
         else
             if current then
-                headers[current] = concat(values, " ")
+                local value = concat(values, " ")
+                headers[current] = value
+                part_headers[#part_headers + 1] = { name = current, value = value }
             end
             local name, next_pos = read_token(line, 1)
             if not name or byte(line, next_pos) ~= 58 then
@@ -281,12 +284,15 @@ local function read_headers(self, start)
         pos = line_end + 2
     end
     if current then
-        headers[current] = concat(values, " ")
+        local value = concat(values, " ")
+        headers[current] = value
+        part_headers[#part_headers + 1] = { name = current, value = value }
     end
-    return headers, body_start
+    return headers, body_start, part_headers
 end
 
 function _M.parse_part(self)
+    self.part_headers = nil
     if self.err then
         return nil, self.err
     end
@@ -309,7 +315,7 @@ function _M.parse_part(self)
     if self.parts >= self.max_parts then
         return fail(self, "too many multipart parts")
     end
-    local headers, body_start = read_headers(self, start)
+    local headers, body_start, part_headers = read_headers(self, start)
     if not headers then
         return fail(self, body_start)
     end
@@ -341,11 +347,16 @@ function _M.parse_part(self)
     local part_body = sub(self.body, body_start, from - 1)
     self.parts = self.parts + 1
     self.start = next_start
+    self.part_headers = part_headers
     if closing then
         self.done = true
         self.body = nil
     end
     return part_body, name, mime, filename
+end
+
+function _M.get_part_headers(self)
+    return self.part_headers
 end
 
 return _M

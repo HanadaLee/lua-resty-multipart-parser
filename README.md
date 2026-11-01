@@ -70,7 +70,7 @@ Installation
 Install the release with LuaRocks configured for your OpenResty LuaJIT:
 
 ```sh
-luarocks install lua-resty-multipart-parser 1.1.0-1
+luarocks install lua-resty-multipart-parser 1.2.0-1
 ```
 
 Ensure the installed Lua directory is included in `lua_package_path`. The
@@ -103,6 +103,19 @@ calls. Invalid or truncated data returns `nil, err`; subsequent calls return the
 same error. Consume all parts to validate the complete message before using a
 selected field. Preamble and epilogue are ignored, and the input string is
 released by the parser after completion or an error.
+
+`p:get_part_headers()` returns the headers of the most recently parsed part as an ordered list of `{ name = string, value = string }` entries. Call it after a successful `parse_part()`. Header names are lowercase; values retain their parameters, with surrounding spaces and tabs removed and folded lines joined with a single space. Ordinary duplicate headers remain separate entries in their original order. Duplicate Content-Disposition and Content-Type fields are still rejected.
+
+```lua
+local part_body, name, mime, filename = p:parse_part()
+if part_body ~= nil then
+    for _, header in ipairs(p:get_part_headers()) do
+        print(header.name, header.value)
+    end
+end
+```
+
+This also exposes headers such as `Content-Range` in `multipart/byteranges` and custom headers in `multipart/mixed`, including parts without a name. A valid part with no headers returns an empty list. The method returns `nil` before the first part and after a `parse_part()` call that returns completion or an error. Headers from the final part remain available until the next `parse_part()` call. Previously returned lists remain valid and are not reused for later parts; changing them does not change parser behavior. The existing four return values of `parse_part()` are unchanged, and `get_part_headers()` performs no parsing or I/O.
 
 Quoted parameters support escaped characters. Duplicate parameters and duplicate
 Content-Disposition or Content-Type fields are rejected. Multiple parts with

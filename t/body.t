@@ -24,8 +24,12 @@ __DATA__
             assert(data == "\255\216\0\128binary\r\n", tostring(data))
             assert(name == "file" and mime == "application/octet-stream")
             assert(filename == "image.bin")
+            local headers = p:get_part_headers()
+            assert(#headers == 2 and headers[2].name == "content-type")
+            assert(headers[2].value == "application/octet-stream")
             local next_part, err = p:parse_part()
             assert(next_part == nil and err == nil)
+            assert(p:get_part_headers() == nil)
             ngx.say("ok")
         }
     }
@@ -59,9 +63,13 @@ ok
             assert(data == "\255\216\0\128binary\r\n", tostring(data))
             assert(name == "file" and mime == "application/octet-stream")
             assert(filename == "image.bin")
+            local headers = p:get_part_headers()
+            assert(#headers == 2 and headers[2].name == "content-type")
+            assert(headers[2].value == "application/octet-stream")
             local next_part
             next_part, err = p:parse_part()
             assert(next_part == nil and err == nil)
+            assert(p:get_part_headers() == nil)
             ngx.say("ok")
         }
     }
